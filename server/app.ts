@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { connectDB } from './config/db.js';
@@ -12,35 +13,25 @@ import recommendationRoutes from './routes/recommendationRoutes.js';
 import trendingRoutes from './routes/trendingRoutes.js';
 import searchRoutes from './routes/searchRoutes.js';
 import listRoutes from './routes/listRoutes.js';
+import type { Request, Response, NextFunction } from 'express';
 
 const app = express();
 
-const isProduction = process.env.NODE_ENV === 'production';
 const allowedOrigins = new Set(
-  (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map((o: string) => o.trim())
-    .filter(Boolean),
+  (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '')
+    .split(',').map((o: string) => o.trim()).filter(Boolean),
 );
 
 app.disable('x-powered-by');
 app.use(cors({
-  origin(origin, callback) {
-    if (!origin || !isProduction || allowedOrigins.has(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error('Origin not allowed'));
+  origin(origin, cb) {
+    if (!origin || allowedOrigins.size === 0 || allowedOrigins.has(origin)) cb(null, true);
+    else cb(new Error('Origin not allowed'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
 }));
 app.use(express.json({ limit: '100kb' }));
-
-app.use((req, _res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
-  next();
-});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
@@ -53,35 +44,28 @@ app.use('/api/recommendations', recommendationRoutes);
 app.use('/api/trending', trendingRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/lists', listRoutes);
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true });
-});
+app.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true }));
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = err instanceof Error ? err.message : 'Something went wrong.';
-  console.error('[ERROR]', message);
-  const safeMessage = message.includes('Missing')
-    ? message
-    : message.includes('ECONNREFUSED') || message.includes('ETIMEDOUT') || message.includes('ENOTFOUND')
-      ? 'Database connection failed. Check your MONGODB_URI connection string.'
-      : 'Something went wrong. Please try again.';
-  res.status(500).json({ message: safeMessage });
+  const safe = message.includes('Missing') ? message
+    : message.includes('ECONNREFUSED') || message.includes('ETIMEDOUT') ? 'Database connection failed.'
+    : 'Something went wrong. Please try again.';
+  res.status(500).json({ message: safe });
 });
 
-// Connect DB once (Vercel keeps the function warm between requests)
-let dbConnected = false;
-const originalHandler = app;
+let dbReady = false;
 
-export default async function handler(req: express.Request, res: express.Response) {
-  if (!dbConnected) {
+export default async function handler(req: Request, res: Response) {
+  if (!dbReady) {
     try {
       await connectDB();
-      dbConnected = true;
+      dbReady = true;
     } catch (err) {
-      console.error('[MongoDB] Connection failed:', err instanceof Error ? err.message : err);
-      res.status(503).json({ message: 'Database connection failed. Check your MONGODB_URI connection string.' });
+      const msg = err instanceof Error ? err.message : 'DB connection failed';
+      res.status(503).json({ message: msg });
       return;
     }
   }
-  return originalHandler(req, res);
+  return app(req, res);
 }
